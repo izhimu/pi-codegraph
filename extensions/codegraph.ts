@@ -1,7 +1,8 @@
 // pi-codegraph — pi extension
 //
 // CodeGraph support for pi: codegraph_explore tool, /codegraph-init,
-// /codegraph-sync, /codegraph-status, and /codegraph-unlock commands.
+// /codegraph-sync, /codegraph-index, /codegraph-uninit, /codegraph-status,
+// /codegraph-unlock, and /codegraph-affected commands.
 //
 // Bridges to CodeGraph by executing the CLI (see docs/adr/0001). Requires the
 // codegraph CLI on PATH: npm i -g @colbymchenry/codegraph
@@ -14,6 +15,12 @@ import * as path from "node:path";
 
 const INSTALL_HINT =
 	"codegraph CLI not found on PATH. Install: npm i -g @colbymchenry/codegraph";
+
+const STATUS_READY = "codegraph";
+const STATUS_INIT = "codegraph:init";
+const STATUS_SYNC = "codegraph:sync";
+const STATUS_INDEX = "codegraph:index";
+const STATUS_KEYS = [STATUS_READY, STATUS_INIT, STATUS_SYNC, STATUS_INDEX] as const;
 
 // Result of `codegraph version` this session — null until first check.
 let cliAvailable: boolean | null = null;
@@ -30,8 +37,9 @@ async function execCg(
 	return await pi.exec("codegraph", args, options);
 }
 
-async function ensureCli(pi: ExtensionAPI): Promise<boolean> {
-	if (cliAvailable !== null) return cliAvailable;
+async function ensureCli(pi: ExtensionAPI, opts: { force?: boolean } = {}): Promise<boolean> {
+	if (!opts.force && cliAvailable === true) return true;
+	if (!opts.force && cliAvailable === false) return false;
 	try {
 		const result = await execCg(pi, ["version"], { timeout: 10_000 });
 		cliAvailable = result.code === 0;
@@ -41,8 +49,18 @@ async function ensureCli(pi: ExtensionAPI): Promise<boolean> {
 	return cliAvailable;
 }
 
+async function requireCli(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	opts: { force?: boolean } = {},
+): Promise<boolean> {
+	if (await ensureCli(pi, opts)) return true;
+	if (ctx.hasUI) ctx.ui.notify(INSTALL_HINT, "error");
+	return false;
+}
+
 function textResult(text: string) {
-	return { content: [{ type: "text" as const, text }], details: undefined };
+	return { content: [{ type: "text" as const, text }], details: {} };
 }
 
 function outputOf(result: { stdout: string; stderr: string; code: number }): string {
@@ -58,19 +76,97 @@ async function isIndexed(cwd: string): Promise<boolean> {
 	}
 }
 
-type StatusState = "index" | "sync" | "init" | boolean | undefined;
+/** Strip a leading @ (some models include it) and resolve against the session cwd. */
+function resolveProjectPath(raw: string | undefined, cwd: string): string {
+	const input = (raw ?? cwd).replace(/^@/, "");
+	return path.resolve(cwd, input);
+}
 
-function updateStatusBar(ctx: ExtensionContext, state: StatusState) {
+function parseForceAndPath(
+	args: string | undefined,
+	cwd: string,
+): { force: boolean; target: string } {
+	const raw = (args ?? "").trim();
+	const force = /(?:^|\s)(?:--force|-f)(?:\s|$)/.test(raw);
+	const rest = raw.replace(/(?:^|\s)(?:--force|-f)(?=\s|$)/g, " ").trim();
+	return { force, target: resolveProjectPath(rest || undefined, cwd) };
+}
+
+function hasIndexHint(ctx: ExtensionContext): boolean {
+	const branch = ctx.sessionManager?.getBranch?.() ?? [];
+	return branch.some(
+		(entry: { type?: string; customType?: string }) =>
+			entry.type === "custom_message" && entry.customType === "codegraph-context",
+	);
+}
+
+function injectIndexHint(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (hasIndexHint(ctx)) return;
+	pi.sendMessage(
+		{ customType: "codegraph-context", content: INDEX_HINT, display: false },
+		{ triggerTurn: false },
+	);
+}
+
+function statusLabel(ctx: ExtensionContext, label: string): string {
+	return ctx.ui.theme?.fg ? `${ctx.ui.theme.fg("accent", "⬡")} ${label}` : `⬡ ${label}`;
+}
+
+function setStatus(ctx: ExtensionContext, key: string, label: string | undefined): void {
 	if (!ctx.hasUI) return;
-	const label = state === true ? "index" : state === false ? undefined : state;
-	if (label) {
-		const text = ctx.ui.theme?.fg
-			? `${ctx.ui.theme.fg("accent", "⬡")} ${label}`
-			: `⬡ ${label}`;
-		ctx.ui.setStatus("codegraph", text);
-	} else {
-		ctx.ui.setStatus("codegraph", undefined);
+	ctx.ui.setStatus(key, label ? statusLabel(ctx, label) : undefined);
+}
+
+function setReadyStatus(ctx: ExtensionContext, indexed: boolean): void {
+	setStatus(ctx, STATUS_READY, indexed ? "index" : undefined);
+}
+
+function clearAllStatus(ctx: ExtensionContext): void {
+	if (!ctx.hasUI) return;
+	for (const key of STATUS_KEYS) ctx.ui.setStatus(key, undefined);
+}
+
+async function pathCompletions(
+	prefix: string,
+): Promise<{ value: string; label: string }[] | null> {
+	const raw = prefix
+		.replace(/(?:^|\s)(?:--force|-f)(?=\s|$)/g, " ")
+		.trimStart()
+		.replace(/^@/, "")
+		.replace(/\\/g, "/");
+	const endsWithSlash = raw.endsWith("/");
+	const slash = raw.lastIndexOf("/");
+	const dirPart = endsWithSlash ? raw : slash >= 0 ? raw.slice(0, slash + 1) : "";
+	const partial = endsWithSlash ? "" : slash >= 0 ? raw.slice(slash + 1) : raw;
+	try {
+		const entries = await fs.readdir(path.resolve(dirPart || "."), { withFileTypes: true });
+		const items: { value: string; label: string }[] = [];
+		for (const entry of entries) {
+			if (entry.name === "node_modules" || entry.name === ".git" || entry.name.startsWith(".")) {
+				continue;
+			}
+			if (partial && !entry.name.toLowerCase().startsWith(partial.toLowerCase())) continue;
+			const value = `${dirPart}${entry.name}${entry.isDirectory() ? "/" : ""}`;
+			items.push({ value, label: entry.isDirectory() ? `${entry.name}/` : entry.name });
+		}
+		items.sort((a, b) => a.label.localeCompare(b.label));
+		return items.length > 0 ? items.slice(0, 50) : null;
+	} catch {
+		return null;
 	}
+}
+
+function postCommand(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	customType: string,
+	out: string,
+	code: number,
+): void {
+	if (ctx.hasUI) {
+		ctx.ui.notify(out, code === 0 ? "info" : "warning");
+	}
+	pi.sendMessage({ customType, content: out, display: true }, { triggerTurn: false });
 }
 
 // Modeled on upstream's MCP SERVER_INSTRUCTIONS (src/mcp/server-instructions.ts):
@@ -101,7 +197,7 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			"codegraph_explore: symbol source + call paths in one shot from the project's CodeGraph index",
 		promptGuidelines: [
 			"For structural code questions (how does X work, where is X, what breaks if I change X), prefer codegraph_explore over grep when the project has a .codegraph/ index.",
-			"Indexing is the user's decision — never run codegraph init yourself; suggest /codegraph-init instead.",
+			"When codegraph_explore reports the project is not indexed, do not run codegraph init yourself; suggest the user run /codegraph-init.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -115,12 +211,13 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			maxFiles: Type.Optional(
 				Type.Integer({
 					description: "Maximum number of files to include source from",
+					minimum: 1,
 				}),
 			),
 		}),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
 			if (!(await ensureCli(pi))) return textResult(INSTALL_HINT);
-			const cwd = params.path ?? ctx.cwd;
+			const cwd = resolveProjectPath(params.path, ctx.cwd);
 			const args = ["explore", params.query, "-p", cwd];
 			if (typeof params.maxFiles === "number" && params.maxFiles > 0) {
 				args.push("--max-files", String(params.maxFiles));
@@ -128,6 +225,7 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			const result = await execCg(pi, args, {
 				signal,
 				timeout: 120_000,
+				cwd,
 			});
 			if (result.killed) return textResult("codegraph explore timed out (120s)");
 			// Non-zero exits carry upstream's agent-friendly guidance (e.g. the
@@ -139,19 +237,23 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 
 	// ── /codegraph-init ────────────────────────────────────────────────────
 	pi.registerCommand("codegraph-init", {
-		description: "Build the CodeGraph index for the current project (codegraph init)",
+		description:
+			"Build the CodeGraph index for the current project (codegraph init). --force indexes home/root.",
+		getArgumentCompletions: pathCompletions,
 		handler: async (args, ctx) => {
-			if (!(await ensureCli(pi))) {
-				if (ctx.hasUI) ctx.ui.notify(INSTALL_HINT, "error");
-				return;
-			}
-			const target = args?.trim() || ctx.cwd;
+			if (!(await requireCli(pi, ctx))) return;
+			const { force, target } = parseForceAndPath(args, ctx.cwd);
 			if (ctx.hasUI) {
 				ctx.ui.notify(`Indexing ${target} — can take minutes on a large repo…`, "info");
 			}
-			updateStatusBar(ctx, "init");
+			setStatus(ctx, STATUS_INIT, "init");
 			try {
-				const result = await execCg(pi, ["init", target], { timeout: 1_800_000 });
+				// -i is a no-op on current CLI and still indexes on pre-0.9.8; -y skips TTY prompts
+				// (pi.exec stdin is ignored). --force overrides the home/root safety check.
+				const cliArgs = ["init", "-i", "-y"];
+				if (force) cliArgs.push("--force");
+				cliArgs.push(target);
+				const result = await execCg(pi, cliArgs, { timeout: 1_800_000, cwd: target });
 				const out = outputOf(result);
 				const success = result.code === 0;
 				if (ctx.hasUI) {
@@ -164,8 +266,10 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 					{ customType: "codegraph-init", content: out, display: true },
 					{ triggerTurn: false },
 				);
+				if (success && (await isIndexed(ctx.cwd))) injectIndexHint(pi, ctx);
 			} finally {
-				updateStatusBar(ctx, await isIndexed(ctx.cwd));
+				setStatus(ctx, STATUS_INIT, undefined);
+				setReadyStatus(ctx, await isIndexed(ctx.cwd));
 			}
 		},
 	});
@@ -173,109 +277,180 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 	// ── /codegraph-sync ────────────────────────────────────────────────────
 	pi.registerCommand("codegraph-sync", {
 		description: "Sync CodeGraph changes since last index (codegraph sync)",
+		getArgumentCompletions: pathCompletions,
 		handler: async (args, ctx) => {
-			if (!(await ensureCli(pi))) {
-				if (ctx.hasUI) ctx.ui.notify(INSTALL_HINT, "error");
-				return;
-			}
-			const target = args?.trim() || ctx.cwd;
+			if (!(await requireCli(pi, ctx))) return;
+			const { target } = parseForceAndPath(args, ctx.cwd);
 			if (ctx.hasUI) {
 				ctx.ui.notify(`Syncing CodeGraph for ${target}…`, "info");
 			}
-			updateStatusBar(ctx, "sync");
+			setStatus(ctx, STATUS_SYNC, "sync");
 			try {
-				const result = await execCg(pi, ["sync", target], { timeout: 300_000 });
-				const out = outputOf(result);
-				if (ctx.hasUI) {
-					ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
-				}
-				pi.sendMessage(
-					{ customType: "codegraph-sync", content: out, display: true },
-					{ triggerTurn: false },
-				);
+				const result = await execCg(pi, ["sync", target], { timeout: 300_000, cwd: target });
+				postCommand(pi, ctx, "codegraph-sync", outputOf(result), result.code);
 			} finally {
-				updateStatusBar(ctx, await isIndexed(ctx.cwd));
+				setStatus(ctx, STATUS_SYNC, undefined);
+				setReadyStatus(ctx, await isIndexed(ctx.cwd));
 			}
+		},
+	});
+
+	// ── /codegraph-index ───────────────────────────────────────────────────
+	pi.registerCommand("codegraph-index", {
+		description:
+			"Rebuild the CodeGraph index from scratch (codegraph index). --force indexes home/root.",
+		getArgumentCompletions: pathCompletions,
+		handler: async (args, ctx) => {
+			if (!(await requireCli(pi, ctx))) return;
+			const { force, target } = parseForceAndPath(args, ctx.cwd);
+			if (ctx.hasUI) {
+				ctx.ui.notify(`Rebuilding index for ${target} — can take minutes on a large repo…`, "info");
+			}
+			setStatus(ctx, STATUS_INDEX, "index");
+			try {
+				const cliArgs = ["index"];
+				if (force) cliArgs.push("--force");
+				cliArgs.push(target);
+				const result = await execCg(pi, cliArgs, { timeout: 1_800_000, cwd: target });
+				postCommand(pi, ctx, "codegraph-index", outputOf(result), result.code);
+				if (result.code === 0 && (await isIndexed(ctx.cwd))) injectIndexHint(pi, ctx);
+			} finally {
+				setStatus(ctx, STATUS_INDEX, undefined);
+				setReadyStatus(ctx, await isIndexed(ctx.cwd));
+			}
+		},
+	});
+
+	// ── /codegraph-uninit ──────────────────────────────────────────────────
+	pi.registerCommand("codegraph-uninit", {
+		description: "Remove the CodeGraph index (.codegraph/) for a project. --force skips confirmation.",
+		getArgumentCompletions: pathCompletions,
+		handler: async (args, ctx) => {
+			if (!(await requireCli(pi, ctx))) return;
+			const { force, target } = parseForceAndPath(args, ctx.cwd);
+			if (!force) {
+				if (!ctx.hasUI) {
+					pi.sendMessage(
+						{
+							customType: "codegraph-uninit",
+							content: "Pass --force to remove the CodeGraph index in non-interactive mode.",
+							display: true,
+						},
+						{ triggerTurn: false },
+					);
+					return;
+				}
+				const ok = await ctx.ui.confirm(
+					"Remove CodeGraph index",
+					`Permanently delete ${path.join(target, ".codegraph/")}?`,
+				);
+				if (!ok) {
+					ctx.ui.notify("Cancelled.", "info");
+					return;
+				}
+			}
+			// Always pass --force: pi.exec stdin is ignored, so the CLI cannot prompt.
+			const result = await execCg(pi, ["uninit", "--force", target], {
+				timeout: 30_000,
+				cwd: target,
+			});
+			postCommand(pi, ctx, "codegraph-uninit", outputOf(result), result.code);
+			setReadyStatus(ctx, await isIndexed(ctx.cwd));
 		},
 	});
 
 	// ── /codegraph-status ──────────────────────────────────────────────────
 	pi.registerCommand("codegraph-status", {
 		description: "Show CodeGraph index status and statistics",
+		getArgumentCompletions: pathCompletions,
 		handler: async (args, ctx) => {
-			if (!(await ensureCli(pi))) {
-				if (ctx.hasUI) ctx.ui.notify(INSTALL_HINT, "error");
-				return;
-			}
-			const target = args?.trim() || ctx.cwd;
-			const result = await execCg(pi, ["status", target], { timeout: 30_000 });
-			const out = outputOf(result);
-			if (ctx.hasUI) ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
-			updateStatusBar(ctx, await isIndexed(ctx.cwd));
-			pi.sendMessage(
-				{ customType: "codegraph-status", content: out, display: true },
-				{ triggerTurn: false },
-			);
+			if (!(await requireCli(pi, ctx, { force: true }))) return;
+			const { target } = parseForceAndPath(args, ctx.cwd);
+			const result = await execCg(pi, ["status", target], { timeout: 30_000, cwd: target });
+			postCommand(pi, ctx, "codegraph-status", outputOf(result), result.code);
+			setReadyStatus(ctx, await isIndexed(ctx.cwd));
 		},
 	});
 
 	// ── /codegraph-unlock ──────────────────────────────────────────────────
 	pi.registerCommand("codegraph-unlock", {
 		description: "Release stale CodeGraph database lock (codegraph unlock)",
+		getArgumentCompletions: pathCompletions,
 		handler: async (args, ctx) => {
-			if (!(await ensureCli(pi))) {
-				if (ctx.hasUI) ctx.ui.notify(INSTALL_HINT, "error");
+			if (!(await requireCli(pi, ctx))) return;
+			const { target } = parseForceAndPath(args, ctx.cwd);
+			const result = await execCg(pi, ["unlock", target], { timeout: 10_000, cwd: target });
+			postCommand(pi, ctx, "codegraph-unlock", outputOf(result), result.code);
+		},
+	});
+
+	// ── /codegraph-affected ────────────────────────────────────────────────
+	pi.registerCommand("codegraph-affected", {
+		description:
+			"List test files affected by changes since a git ref (default HEAD). Uses `git diff --name-only` then `codegraph affected`.",
+		handler: async (args, ctx) => {
+			if (!(await requireCli(pi, ctx))) return;
+			const base = args?.trim() || "HEAD";
+			const diff = await pi.exec("git", ["diff", "--name-only", base], {
+				cwd: ctx.cwd,
+				timeout: 30_000,
+			});
+			if (diff.code !== 0) {
+				postCommand(pi, ctx, "codegraph-affected", outputOf(diff), diff.code);
 				return;
 			}
-			const target = args?.trim() || ctx.cwd;
-			const result = await execCg(pi, ["unlock", target], { timeout: 10_000 });
-			const out = outputOf(result);
-			if (ctx.hasUI) ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
-			pi.sendMessage(
-				{ customType: "codegraph-unlock", content: out, display: true },
-				{ triggerTurn: false },
-			);
+			const files = diff.stdout
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.filter(Boolean);
+			if (files.length === 0) {
+				const msg = `No changed files since ${base}.`;
+				if (ctx.hasUI) ctx.ui.notify(msg, "info");
+				pi.sendMessage(
+					{ customType: "codegraph-affected", content: msg, display: true },
+					{ triggerTurn: false },
+				);
+				return;
+			}
+			const result = await execCg(pi, ["affected", ...files, "--quiet"], {
+				cwd: ctx.cwd,
+				timeout: 60_000,
+			});
+			postCommand(pi, ctx, "codegraph-affected", outputOf(result), result.code);
 		},
 	});
 
 	// ── session_start: CLI check + incremental sync + context hint ────────
-	pi.on("session_start", async (event, ctx) => {
-		if (!(await ensureCli(pi))) {
-			updateStatusBar(ctx, false);
+	pi.on("session_start", async (_event, ctx) => {
+		if (!(await ensureCli(pi, { force: cliAvailable === false }))) {
+			setReadyStatus(ctx, false);
 			if (ctx.hasUI && !notifiedMissing) {
 				notifiedMissing = true;
 				ctx.ui.notify(INSTALL_HINT, "warning");
 			}
 			return;
 		}
+		notifiedMissing = false;
 
 		const indexed = await isIndexed(ctx.cwd);
 		if (indexed) {
-			updateStatusBar(ctx, "sync");
+			setStatus(ctx, STATUS_SYNC, "sync");
 			// Incremental sync; near-zero cost when nothing changed.
-			void execCg(pi, ["sync", "-q", ctx.cwd], { timeout: 300_000 })
-				.catch(() => {})
+			void execCg(pi, ["sync", "-q", ctx.cwd], { timeout: 300_000, cwd: ctx.cwd })
+				.catch((e) => {
+					console.debug("[codegraph] background sync failed:", e);
+				})
 				.finally(async () => {
-					updateStatusBar(ctx, await isIndexed(ctx.cwd));
+					setStatus(ctx, STATUS_SYNC, undefined);
+					setReadyStatus(ctx, await isIndexed(ctx.cwd));
 				});
+			injectIndexHint(pi, ctx);
 		} else {
-			updateStatusBar(ctx, false);
-		}
-
-		// Inject the agent playbook once per process when the project IS
-		// indexed (upstream does this via MCP initialize instructions). Skip
-		// "reload": extensions rebind in place and the message would duplicate.
-		if (event.reason !== "reload" && indexed) {
-			pi.sendMessage(
-				{ customType: "codegraph-context", content: INDEX_HINT, display: false },
-				{ triggerTurn: false },
-			);
+			setReadyStatus(ctx, false);
 		}
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		if (ctx.hasUI) {
-			ctx.ui.setStatus("codegraph", undefined);
-		}
+		clearAllStatus(ctx);
 	});
 }
