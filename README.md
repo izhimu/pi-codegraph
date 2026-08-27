@@ -18,7 +18,7 @@ npm i -g @colbymchenry/codegraph
 ### npm (recommended)
 
 ```bash
-pi install @izhimu/pi-codegraph
+pi install npm:@izhimu/pi-codegraph
 ```
 
 ### From git
@@ -46,10 +46,13 @@ pi -e ./extensions/codegraph.ts
 ## What you get
 
 - **`codegraph_explore` tool** — the agent's primary code-intelligence tool. Query with symbol names or a natural-language question; optionally pass `path` to query another indexed project, and `maxFiles` to cap source lines.
-- **`/codegraph-init [path]`** — build the index for the project (`codegraph init`).
+- **`/codegraph-init [--force] [path]`** — build the index for the project (`codegraph init`). `--force` indexes home/root.
 - **`/codegraph-sync [path]`** — manually sync changes since last index (`codegraph sync`).
+- **`/codegraph-index [--force] [path]`** — rebuild the index from scratch (`codegraph index`).
+- **`/codegraph-uninit [--force] [path]`** — remove `.codegraph/` (`codegraph uninit`). Confirms in the TUI unless `--force` is passed.
 - **`/codegraph-status [path]`** — index status and statistics (`codegraph status`).
 - **`/codegraph-unlock [path]`** — release stale database locks if daemon crashed (`codegraph unlock`).
+- **`/codegraph-affected [base-ref]`** — list test files affected by changes since a git ref (default `HEAD`).
 - **Session-start sync** — runs `codegraph sync -q` once per session so the index reflects your last edits.
 
 ## Usage

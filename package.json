@@ -1,6 +1,6 @@
 {
 	"name": "@izhimu/pi-codegraph",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"description": "CodeGraph support for pi — symbol source + call paths via the codegraph CLI",
 	"type": "module",
 	"keywords": ["pi-package", "codegraph", "code-intelligence", "knowledge-graph"],
@@ -13,10 +13,12 @@
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
 	},
+	"dependencies": {
+		"typebox": "^1.3.7"
+	},
 	"devDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
 		"@types/node": "^22.0.0",
-		"typebox": "^1.3.7",
 		"typescript": "^5.5.0"
 	},
 	"scripts": {
