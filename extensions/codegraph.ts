@@ -75,6 +75,8 @@ function updateStatusBar(ctx: ExtensionContext, state: StatusState) {
 
 // Modeled on upstream's MCP SERVER_INSTRUCTIONS (src/mcp/server-instructions.ts):
 // lead the agent to codegraph_explore BEFORE grep/read, plus anti-patterns and staleness handling.
+// Injected into the system prompt every turn while indexed (before_agent_start):
+// persistent presence survives compaction, unlike a one-shot session-start user message.
 const INDEX_HINT = `# CodeGraph — this project is indexed
 
 A \`.codegraph/\` index exists here: SQLite knowledge graph of every symbol, edge, and file (30+ languages). ONE \`codegraph_explore\` call returns the relevant symbols' verbatim line-numbered source (treat it as already Read — safe to Edit from) PLUS call paths between them and a blast-radius summary of what depends on them.
@@ -94,14 +96,14 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 		name: "codegraph_explore",
 		label: "CodeGraph Explore",
 		description:
-			"PRIMARY tool for code questions — call it BEFORE grep/read when the project has a .codegraph/ index. " +
+			"PRIMARY tool for code questions — call it BEFORE grep/read. " +
 			"One query returns the relevant symbols' verbatim line-numbered source plus the call paths between them and a blast-radius summary. " +
 			"If the project is not indexed the output says so: continue with built-in tools and suggest the user run /codegraph-init.",
 		promptSnippet:
 			"codegraph_explore: symbol source + call paths in one shot from the project's CodeGraph index",
 		promptGuidelines: [
-			"For structural code questions (how does X work, where is X, what breaks if I change X), prefer codegraph_explore over grep when the project has a .codegraph/ index.",
-			"Indexing is the user's decision — never run codegraph init yourself; suggest /codegraph-init instead.",
+			"For structural code questions (how does X work, where is X, what breaks if I change X), call codegraph_explore before grep.",
+			"If codegraph_explore returns empty or says the project is not indexed, fall back to grep and suggest /codegraph-init. Never run codegraph init yourself.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -133,7 +135,11 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			// Non-zero exits carry upstream's agent-friendly guidance (e.g. the
 			// "not initialized" message) — pass it through verbatim.
 			if (result.code !== 0) return textResult(outputOf(result));
-			return textResult(result.stdout.trim());
+			const out = result.stdout.trim();
+			return textResult(
+				out ||
+					"codegraph explore returned no results. Retry with different query terms (symbol names work best); if it stays empty, fall back to grep.",
+			);
 		},
 	});
 
@@ -238,8 +244,8 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// ── session_start: CLI check + incremental sync + context hint ────────
-	pi.on("session_start", async (event, ctx) => {
+	// ── session_start: CLI check + incremental sync ──────────────────────
+	pi.on("session_start", async (_event, ctx) => {
 		if (!(await ensureCli(pi))) {
 			updateStatusBar(ctx, false);
 			if (ctx.hasUI && !notifiedMissing) {
@@ -261,16 +267,21 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 		} else {
 			updateStatusBar(ctx, false);
 		}
+	});
 
-		// Inject the agent playbook once per process when the project IS
-		// indexed (upstream does this via MCP initialize instructions). Skip
-		// "reload": extensions rebind in place and the message would duplicate.
-		if (event.reason !== "reload" && indexed) {
-			pi.sendMessage(
-				{ customType: "codegraph-context", content: INDEX_HINT, display: false },
-				{ triggerTurn: false },
-			);
-		}
+
+	// ── before_agent_start: system-prompt hint while indexed ─────────────
+	// Appended to the current system prompt (never replaces it — other
+	// extensions chain through the same value). Re-evaluated each turn, so it
+	// survives compaction and picks up indexes built mid-session via
+	// /codegraph-init. Resets to the base prompt automatically when the index
+	// is gone.
+	pi.on("before_agent_start", async (event, ctx) => {
+		// Sentinel = the hint's full first line: a bare "# CodeGraph" substring
+		// can appear in project docs included in the base prompt.
+		if (event.systemPrompt.includes("# CodeGraph — this project is indexed")) return;
+		if (!(await isIndexed(ctx.cwd))) return; // no index — stay quiet
+		return { systemPrompt: `${event.systemPrompt}\n\n${INDEX_HINT}` };
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {

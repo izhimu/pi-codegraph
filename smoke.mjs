@@ -78,6 +78,22 @@ if (!currentStatus?.includes("sync") && !currentStatus?.includes("index")) {
 	fail(`expected sync or index in status, got: ${currentStatus}`);
 }
 
+// 3b. before_agent_start: hint only when indexed, chained prompts untouched
+const onBeforeStart = handlers.get("before_agent_start") ?? fail("before_agent_start not registered");
+const bareDir = ".smoke-tmp-bare";
+mkdirSync(bareDir, { recursive: true });
+const noHint = await onBeforeStart({ systemPrompt: "BASE" }, ctx(bareDir));
+if (noHint !== undefined) fail(`expected no hint for unindexed dir, got: ${JSON.stringify(noHint)}`);
+const hinted = await onBeforeStart({ systemPrompt: "BASE" }, ctx(tmpTestDir));
+if (!hinted?.systemPrompt?.startsWith("BASE\n\n# CodeGraph")) {
+	fail(`expected BASE + CodeGraph hint, got: ${JSON.stringify(hinted)}`);
+}
+const already = `${hinted.systemPrompt}`;
+const dup = await onBeforeStart({ systemPrompt: already }, ctx(tmpTestDir));
+if (dup !== undefined) fail("expected no double-injection when hint already chained");
+rmSync(bareDir, { recursive: true, force: true });
+console.log("before_agent_start hint OK");
+
 // 4. Test codegraph-sync transitions
 const statusHistory = [];
 const trackingCtx = {
