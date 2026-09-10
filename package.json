@@ -1,9 +1,9 @@
 {
 	"name": "@izhimu/pi-codegraph",
-	"version": "0.2.1",
-	"description": "CodeGraph support for pi — symbol source + call paths via the codegraph CLI",
+	"version": "0.3.0",
+	"description": "CodeGraph support for pi and oh-my-pi — symbol source + call paths via the codegraph CLI",
 	"type": "module",
-	"keywords": ["pi-package", "codegraph", "code-intelligence", "knowledge-graph"],
+	"keywords": ["pi-package", "codegraph", "code-intelligence", "knowledge-graph", "oh-my-pi"],
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/izhimu/pi-codegraph.git"
@@ -32,6 +32,7 @@
 		"skills/",
 		"CONTEXT.md",
 		"README.md",
+		"CHANGELOG.md",
 		"LICENSE"
 	]
 }

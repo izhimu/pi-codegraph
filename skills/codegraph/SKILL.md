@@ -5,23 +5,22 @@ description: Query the project's CodeGraph index (symbol source + call paths) vi
 
 # CodeGraph
 
-The `codegraph_explore` tool answers structural code questions in one shot: the relevant symbols' verbatim line-numbered source, the call paths between them, and a blast-radius summary. It reads the project's CodeGraph index (`.codegraph/`), built and maintained by the `codegraph` CLI.
+Query CodeGraph index via \`codegraph_explore\` for verbatim source, call paths, and blast radius.
 
 ## When to use
 
-- "How does X work?" / "Where is X?" / "What calls Y?" / "What breaks if I change Z?"
-- Before an edit, to map the symbols you are about to touch and inspect the blast radius.
-- Prefer it over grep/read for structural exploration **when the project has a `.codegraph/` index**.
+- Structural code questions ("how X works", "where X is", "what calls Y", "what breaks if Z changes").
+- Before editing, to map symbols and blast radius. Prefer over grep/read on indexed projects.
 
-## How to query
+## Parameters
 
-- `query`: symbol names (`CodeGraph open`, `MCPSession`), endpoint flows (`mutateElement renderScene`), or a natural-language question. Naming a file or symbol returns its current line-numbered source.
-- `path`: optional project path. Defaults to the current working directory. In a monorepo, pass the sub-project directory that contains `.codegraph/`.
-- `maxFiles`: optional integer to limit how many file sources are returned.
+- \`query\`: Symbol names, endpoint flows (\`mutateElement renderScene\`), or natural question.
+- \`path\`: Subproject path containing \`.codegraph/\` (for monorepos). Defaults to cwd.
+- \`maxFiles\`: Cap source files returned.
 
-## Anti-patterns & Guidance
+## Rules
 
-- **Trust AST results.** Don't re-verify codegraph output with grep.
-- **Already sent earlier in this conversation.** When this pointer appears, the lines are already in your session context — scroll back instead of re-fetching or reading the file.
-- **Staleness banner.** If output warns `⚠️ Some files referenced below were edited since the last index sync`, read only those specific files directly; other files in the response remain fresh.
-- **No index, no tool.** If the output says the project isn't indexed, stop calling `codegraph_explore` for that project this session and use built-in tools. Indexing is the user's decision — suggest the user run `/codegraph-init` if appropriate.
+- Trust AST output; never re-verify with grep.
+- "Already sent earlier": lines exist in earlier context; do not re-fetch.
+- "⚠️ files edited since sync": re-read only flagged files directly.
+- Unindexed project: use built-in tools; suggest user run \`/codegraph-init\` (never run auto-init).

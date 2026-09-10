@@ -58,35 +58,16 @@ async function isIndexed(cwd: string): Promise<boolean> {
 	}
 }
 
-type StatusState = "index" | "sync" | "init" | boolean | undefined;
-
-function updateStatusBar(ctx: ExtensionContext, state: StatusState) {
-	if (!ctx.hasUI) return;
-	const label = state === true ? "index" : state === false ? undefined : state;
-	if (label) {
-		const text = ctx.ui.theme?.fg
-			? `${ctx.ui.theme.fg("accent", "⬡")} ${label}`
-			: `⬡ ${label}`;
-		ctx.ui.setStatus("codegraph", text);
-	} else {
-		ctx.ui.setStatus("codegraph", undefined);
-	}
-}
-
 // Modeled on upstream's MCP SERVER_INSTRUCTIONS (src/mcp/server-instructions.ts):
 // lead the agent to codegraph_explore BEFORE grep/read, plus anti-patterns and staleness handling.
-const INDEX_HINT = `# CodeGraph — this project is indexed
+const INDEX_HINT = `# CodeGraph
+Project indexed (.codegraph/). Use \`codegraph_explore\` instead of grep/read for code structure, call paths, and blast radius. Verbatim line-numbered source returned is safe to edit directly.
 
-A \`.codegraph/\` index exists here: SQLite knowledge graph of every symbol, edge, and file (30+ languages). ONE \`codegraph_explore\` call returns the relevant symbols' verbatim line-numbered source (treat it as already Read — safe to Edit from) PLUS call paths between them and a blast-radius summary of what depends on them.
-
-- For structural questions (how does X work / where is X / who calls Y / what breaks if I change Z), call \`codegraph_explore\` INSTEAD of grep + read — usually ONE call answers the whole question.
-- Call it BEFORE and WHILE writing or editing code: it puts the blast radius in view before you touch a symbol you can name.
-- Flow tracing: name endpoint symbols (e.g. \`mutateElement renderScene\`) to surface the path across dynamic-dispatch hops.
-- Anti-patterns: don't grep or Read first; don't re-verify codegraph output with grep (AST-derived, more accurate than grep); don't reconstruct a flow by hand.
-- "Already sent earlier in this conversation": pointer means content is already in context — do not re-fetch or Read.
-- Staleness: if tool output contains "⚠️ Some files referenced below were edited since the last index sync", read only those flagged files directly.
-- Multi-project / Monorepo: pass \`path\` to query any indexed sub-project directory.
-- If a project has no \`.codegraph/\`, use built-in tools there; indexing is the user's decision — suggest /codegraph-init if it comes up.`;
+- Trust AST results; do not re-verify with grep.
+- "Already sent earlier": content is in context; do not re-read.
+- "⚠️ files edited since sync": re-read only flagged files.
+- Monorepo: pass \`path\` for subproject.
+- Do not run \`codegraph init\` without explicit user request.`;
 
 export default function codegraphExtension(pi: ExtensionAPI) {
 	// ── codegraph_explore tool ─────────────────────────────────────────────
@@ -100,8 +81,8 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 		promptSnippet:
 			"codegraph_explore: symbol source + call paths in one shot from the project's CodeGraph index",
 		promptGuidelines: [
-			"For structural code questions (how does X work, where is X, what breaks if I change X), prefer codegraph_explore over grep when the project has a .codegraph/ index.",
-			"Indexing is the user's decision — never run codegraph init yourself; suggest /codegraph-init instead.",
+			"Prefer codegraph_explore over grep/read for structural code questions when .codegraph/ exists.",
+			"Never run codegraph init automatically; suggest /codegraph-init to the user.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -149,24 +130,19 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			if (ctx.hasUI) {
 				ctx.ui.notify(`Indexing ${target} — can take minutes on a large repo…`, "info");
 			}
-			updateStatusBar(ctx, "init");
-			try {
-				const result = await execCg(pi, ["init", target], { timeout: 1_800_000 });
-				const out = outputOf(result);
-				const success = result.code === 0;
-				if (ctx.hasUI) {
-					ctx.ui.notify(
-						success ? "CodeGraph index built." : `codegraph init failed (exit ${result.code})`,
-						success ? "info" : "error",
-					);
-				}
-				pi.sendMessage(
-					{ customType: "codegraph-init", content: out, display: true },
-					{ triggerTurn: false },
+			const result = await execCg(pi, ["init", target], { timeout: 1_800_000 });
+			const out = outputOf(result);
+			const success = result.code === 0;
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					success ? "CodeGraph index built." : `codegraph init failed (exit ${result.code})`,
+					success ? "info" : "error",
 				);
-			} finally {
-				updateStatusBar(ctx, await isIndexed(ctx.cwd));
 			}
+			pi.sendMessage(
+				{ customType: "codegraph-init", content: out, display: true },
+				{ triggerTurn: false },
+			);
 		},
 	});
 
@@ -182,20 +158,15 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			if (ctx.hasUI) {
 				ctx.ui.notify(`Syncing CodeGraph for ${target}…`, "info");
 			}
-			updateStatusBar(ctx, "sync");
-			try {
-				const result = await execCg(pi, ["sync", target], { timeout: 300_000 });
-				const out = outputOf(result);
-				if (ctx.hasUI) {
-					ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
-				}
-				pi.sendMessage(
-					{ customType: "codegraph-sync", content: out, display: true },
-					{ triggerTurn: false },
-				);
-			} finally {
-				updateStatusBar(ctx, await isIndexed(ctx.cwd));
+			const result = await execCg(pi, ["sync", target], { timeout: 300_000 });
+			const out = outputOf(result);
+			if (ctx.hasUI) {
+				ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
 			}
+			pi.sendMessage(
+				{ customType: "codegraph-sync", content: out, display: true },
+				{ triggerTurn: false },
+			);
 		},
 	});
 
@@ -211,7 +182,6 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			const result = await execCg(pi, ["status", target], { timeout: 30_000 });
 			const out = outputOf(result);
 			if (ctx.hasUI) ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
-			updateStatusBar(ctx, await isIndexed(ctx.cwd));
 			pi.sendMessage(
 				{ customType: "codegraph-status", content: out, display: true },
 				{ triggerTurn: false },
@@ -241,7 +211,6 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 	// ── session_start: CLI check + incremental sync + context hint ────────
 	pi.on("session_start", async (event, ctx) => {
 		if (!(await ensureCli(pi))) {
-			updateStatusBar(ctx, false);
 			if (ctx.hasUI && !notifiedMissing) {
 				notifiedMissing = true;
 				ctx.ui.notify(INSTALL_HINT, "warning");
@@ -251,15 +220,8 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 
 		const indexed = await isIndexed(ctx.cwd);
 		if (indexed) {
-			updateStatusBar(ctx, "sync");
 			// Incremental sync; near-zero cost when nothing changed.
-			void execCg(pi, ["sync", "-q", ctx.cwd], { timeout: 300_000 })
-				.catch(() => {})
-				.finally(async () => {
-					updateStatusBar(ctx, await isIndexed(ctx.cwd));
-				});
-		} else {
-			updateStatusBar(ctx, false);
+			void execCg(pi, ["sync", "-q", ctx.cwd], { timeout: 300_000 }).catch(() => {});
 		}
 
 		// Inject the agent playbook once per process when the project IS
@@ -273,9 +235,4 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		if (ctx.hasUI) {
-			ctx.ui.setStatus("codegraph", undefined);
-		}
-	});
 }

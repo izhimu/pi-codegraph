@@ -2,8 +2,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-green.svg)](https://github.com/earendil-works/pi)
+[![npm version](https://img.shields.io/npm/v/@izhimu/pi-codegraph.svg)](https://www.npmjs.com/package/@izhimu/pi-codegraph)
 
-[CodeGraph](https://github.com/colbymchenry/codegraph) support for [pi](https://github.com/earendil-works/pi). The agent gets a `codegraph_explore` tool — one query returns the relevant symbols' verbatim line-numbered source plus the call paths between them.
+[CodeGraph](https://github.com/colbymchenry/codegraph) support for [pi](https://github.com/earendil-works/pi) and [oh-my-pi](https://github.com/can1357/oh-my-pi). The agent gets a `codegraph_explore` tool — one query returns the relevant symbols' verbatim line-numbered source plus the call paths between them.
 
 ## Requirements
 
@@ -84,11 +85,11 @@ pi-codegraph/
 │       └── SKILL.md      # agent guidance for codegraph_explore
 ├── docs/adr/             # design decisions
 ├── CONTEXT.md            # domain glossary
+├── CHANGELOG.md          # release notes
 ├── package.json          # pi package manifest
 ├── tsconfig.json
 ├── LICENSE
 └── README.md
-```
 
 ## Development
 
@@ -96,6 +97,10 @@ pi-codegraph/
 npm install
 npm run typecheck
 ```
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release history.
 
 ## Contributing
 

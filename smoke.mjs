@@ -42,68 +42,23 @@ const status = commands.get("codegraph-status") ?? fail("status not registered")
 const unlock = commands.get("codegraph-unlock") ?? fail("unlock not registered");
 console.log("Commands registration OK");
 
-// session_start / session_shutdown: handlers registered + status bar check
+// session_start: handler registered
 const onStart = handlers.get("session_start") ?? fail("session_start not registered");
-const onShutdown = handlers.get("session_shutdown") ?? fail("session_shutdown not registered");
-
-let currentStatus = null;
-const mockCtx = (cwd) => ({
-	cwd,
-	hasUI: true,
-	ui: {
-		notify: () => {},
-		setStatus: (_id, text) => { currentStatus = text; },
-	},
-});
 
 const tmpTestDir = ".smoke-tmp";
 rmSync(tmpTestDir, { recursive: true, force: true });
 mkdirSync(tmpTestDir, { recursive: true });
 
-// 1. Unindexed dir: no status
-await onStart({ reason: "start" }, mockCtx(tmpTestDir));
-if (currentStatus !== undefined) fail(`expected undefined status for empty dir, got: ${currentStatus}`);
-
-// 2. Dir with .codegraph/ but no codegraph.db (e.g. only .gitignore): no status
-mkdirSync(`${tmpTestDir}/.codegraph`, { recursive: true });
-writeFileSync(`${tmpTestDir}/.codegraph/.gitignore`, "*\n!.gitignore\n");
-await onStart({ reason: "start" }, mockCtx(tmpTestDir));
-if (currentStatus !== undefined) fail(`expected undefined status for dir with only .gitignore, got: ${currentStatus}`);
-
-// 3. Dir with .codegraph/codegraph.db: status should be set
-writeFileSync(`${tmpTestDir}/.codegraph/codegraph.db`, "dummy-db");
-await onStart({ reason: "start" }, mockCtx(tmpTestDir));
-// session_start sets "sync" immediately when starting background sync
-if (!currentStatus?.includes("sync") && !currentStatus?.includes("index")) {
-	fail(`expected sync or index in status, got: ${currentStatus}`);
-}
-
-// 4. Test codegraph-sync transitions
-const statusHistory = [];
-const trackingCtx = {
-	cwd: tmpTestDir,
+const mockCtx = (cwd) => ({
+	cwd,
 	hasUI: true,
-	ui: {
-		notify: () => {},
-		setStatus: (_id, text) => {
-			statusHistory.push(text);
-			currentStatus = text;
-		},
-	},
-};
-await sync.handler("", trackingCtx);
-if (!statusHistory.some((s) => s?.includes("sync"))) {
-	fail(`expected sync status during codegraph-sync, got history: ${JSON.stringify(statusHistory)}`);
-}
-if (!statusHistory[statusHistory.length - 1]?.includes("index")) {
-	fail(`expected final index status after codegraph-sync, got: ${statusHistory[statusHistory.length - 1]}`);
-}
+	ui: { notify: () => {} },
+});
 
-await onShutdown({}, mockCtx(tmpTestDir));
-if (currentStatus !== undefined) fail(`expected shutdown to clear status, got: ${currentStatus}`);
+await onStart({ reason: "start" }, mockCtx(tmpTestDir));
 
 rmSync(tmpTestDir, { recursive: true, force: true });
-console.log("session_start & session_shutdown OK");
+console.log("session_start OK");
 
 rmSync(".smoke-build", { recursive: true, force: true });
 console.log("SMOKE PASS");
