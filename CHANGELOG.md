@@ -2,12 +2,18 @@
 
 All notable changes to `@izhimu/pi-codegraph` will be documented in this file.
 
-## [0.3.0] - 2026-08-22
+## [0.3.0] - 2026-09-10
 
 ### Changed & Improved
+- The index playbook (`INDEX_HINT`) is now injected into the system prompt on every turn while the project is indexed (`before_agent_start`), replacing the one-shot session-start user message. Survives compaction and picks up indexes built mid-session via `/codegraph-init`; the base prompt is restored automatically when the index is gone.
 - **Prompt Token Optimization**: Compressed `INDEX_HINT` and `SKILL.md` by ~60%, eliminating background fluff while preserving all core behavioral constraints (AST priority, anti-grep verification, cached pointers, and staleness handling).
+- Tool description and guidelines no longer hedge on "when the project has a .codegraph/ index" — `codegraph_explore` is unconditionally primary, with explicit fallback to grep when empty or unindexed.
 - **Cleaner TUI**: Removed permanent bottom status bar indicator to reduce UI clutter.
 - **Cross-Platform Compatibility**: Fully verified cross-platform execution on macOS, Linux, and Windows.
+
+### Fixed
+- Empty `codegraph explore` output now returns explicit retry/fallback guidance instead of an empty tool result that read as a broken tool.
+- Duplicate-injection sentinel narrowed to the hint's full first line; a bare `# CodeGraph` substring in project docs no longer suppresses the hint.
 
 ## [0.2.1] - 2026-08-16
 
