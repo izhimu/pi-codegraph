@@ -49,18 +49,26 @@ const tmpTestDir = ".smoke-tmp";
 rmSync(tmpTestDir, { recursive: true, force: true });
 mkdirSync(tmpTestDir, { recursive: true });
 
-// before_agent_start: hint only when indexed, chained prompts untouched
+// before_agent_start: awareness hint when unindexed, full hint when indexed
+// (including subdirectories of an indexed root), chained prompts untouched
 const onBeforeStart = handlers.get("before_agent_start") ?? fail("before_agent_start not registered");
 const bareDir = ".smoke-tmp-bare";
 mkdirSync(bareDir, { recursive: true });
-const noHint = await onBeforeStart({ systemPrompt: "BASE" }, ctx(bareDir));
-if (noHint !== undefined) fail(`expected no hint for unindexed dir, got: ${JSON.stringify(noHint)}`);
+const aware = await onBeforeStart({ systemPrompt: "BASE" }, ctx(bareDir));
+if (!aware?.systemPrompt?.includes("tool available")) {
+	fail(`expected one-line awareness hint for unindexed dir, got: ${JSON.stringify(aware)}`);
+}
 
 mkdirSync(`${tmpTestDir}/.codegraph`, { recursive: true });
 writeFileSync(`${tmpTestDir}/.codegraph/codegraph.db`, "dummy-db");
 const hinted = await onBeforeStart({ systemPrompt: "BASE" }, ctx(tmpTestDir));
-if (!hinted?.systemPrompt?.startsWith("BASE\n\n# CodeGraph")) {
+if (!hinted?.systemPrompt?.startsWith("BASE\n\n# CodeGraph — this project is indexed")) {
 	fail(`expected BASE + CodeGraph hint, got: ${JSON.stringify(hinted)}`);
+}
+mkdirSync(`${tmpTestDir}/sub/dir`, { recursive: true });
+const subdirHint = await onBeforeStart({ systemPrompt: "BASE" }, ctx(`${tmpTestDir}/sub/dir`));
+if (!subdirHint?.systemPrompt?.includes("this project is indexed")) {
+	fail(`expected indexed hint from subdirectory, got: ${JSON.stringify(subdirHint)}`);
 }
 const already = `${hinted.systemPrompt}`;
 const dup = await onBeforeStart({ systemPrompt: already }, ctx(tmpTestDir));

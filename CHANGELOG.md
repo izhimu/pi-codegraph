@@ -2,6 +2,12 @@
 
 All notable changes to `@izhimu/pi-codegraph` will be documented in this file.
 
+## [0.4.0] - 2026-09-11
+
+### Changed & Improved
+- **Higher `codegraph_explore` adoption**: the system-prompt hint is no longer gated on an index existing at the exact cwd. Index detection now walks parent directories (`findIndexRoot`), so working from any subdirectory of an indexed project still yields the full hint, and `codegraph_explore` / session-start sync automatically query from the index root.
+- **Always-on awareness**: unindexed projects now get a one-line hint stating the tool exists and falls back to grep, instead of total silence that let the model default to grep. Indexed projects get a compressed 2-line playbook; staleness details remain in `SKILL.md`. Net context cost: 1 line unindexed, 2 lines indexed, per turn.
+
 ## [0.3.0] - 2026-09-10
 
 ### Changed & Improved

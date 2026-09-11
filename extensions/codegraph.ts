@@ -49,27 +49,31 @@ function outputOf(result: { stdout: string; stderr: string; code: number }): str
 	return (result.stdout + result.stderr).trim() || `exit ${result.code}`;
 }
 
-async function isIndexed(cwd: string): Promise<boolean> {
-	try {
-		await fs.access(path.join(cwd, ".codegraph", "codegraph.db"));
-		return true;
-	} catch {
-		return false;
+// Nearest ancestor directory containing a CodeGraph index, or null.
+async function findIndexRoot(cwd: string): Promise<string | null> {
+	let dir = path.resolve(cwd);
+	for (;;) {
+		try {
+			await fs.access(path.join(dir, ".codegraph", "codegraph.db"));
+			return dir;
+		} catch { /* keep walking */ }
+		const parent = path.dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
 	}
 }
 
 // Modeled on upstream's MCP SERVER_INSTRUCTIONS (src/mcp/server-instructions.ts):
 // lead the agent to codegraph_explore BEFORE grep/read, plus anti-patterns and staleness handling.
-// Injected into the system prompt every turn while indexed (before_agent_start):
-// persistent presence survives compaction, unlike a one-shot session-start user message.
-const INDEX_HINT = `# CodeGraph — this project is indexed
-Project indexed (.codegraph/). Use \`codegraph_explore\` instead of grep/read for code structure, call paths, and blast radius. Verbatim line-numbered source returned is safe to edit directly.
+// Injected into the system prompt every turn (before_agent_start): persistent presence
+// survives compaction, unlike a one-shot session-start user message.
+// Two variants keep token cost minimal: full guidance only while indexed,
+// a single awareness line otherwise.
+const INDEX_HINT = `# CodeGraph — this project is indexed (root: $ROOT)
+Use \`codegraph_explore\` BEFORE grep/read for code structure, call paths, and blast radius. Verbatim line-numbered source returned is safe to edit directly. Trust AST results; do not re-verify with grep.`;
 
-- Trust AST results; do not re-verify with grep.
-- "Already sent earlier": content is in context; do not re-read.
-- "⚠️ files edited since sync": re-read only flagged files.
-- Monorepo: pass \`path\` for subproject.
-- Do not run \`codegraph init\` without explicit user request.`;
+const AWARE_HINT = `# CodeGraph
+\`codegraph_explore\` tool available: symbol source + call paths in one shot. If the project is not indexed it says so — then fall back to grep and suggest /codegraph-init.`;
 
 export default function codegraphExtension(pi: ExtensionAPI) {
 	// ── codegraph_explore tool ─────────────────────────────────────────────
@@ -102,8 +106,8 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			),
 		}),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-			if (!(await ensureCli(pi))) return textResult(INSTALL_HINT);
-			const cwd = params.path ?? ctx.cwd;
+			// Query from the index root so the tool works from any subdirectory.
+			const cwd = params.path ?? (await findIndexRoot(ctx.cwd)) ?? ctx.cwd;
 			const args = ["explore", params.query, "-p", cwd];
 			if (typeof params.maxFiles === "number" && params.maxFiles > 0) {
 				args.push("--max-files", String(params.maxFiles));
@@ -224,26 +228,33 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		const indexed = await isIndexed(ctx.cwd);
-		if (indexed) {
+		const root = await findIndexRoot(ctx.cwd);
+		if (root) {
 			// Incremental sync; near-zero cost when nothing changed.
-			void execCg(pi, ["sync", "-q", ctx.cwd], { timeout: 300_000 }).catch(() => {});
+			void execCg(pi, ["sync", "-q", root], { timeout: 300_000 }).catch(() => {});
 		}
 	});
 
 
-	// ── before_agent_start: system-prompt hint while indexed ─────────────
+	// ── before_agent_start: system-prompt hint, every turn ───────────────
 	// Appended to the current system prompt (never replaces it — other
 	// extensions chain through the same value). Re-evaluated each turn, so it
-	// survives compaction and picks up indexes built mid-session via
-	// /codegraph-init. Resets to the base prompt automatically when the index
-	// is gone.
+	// survives compaction, picks up indexes built mid-session via
+	// /codegraph-init, and resets to the base prompt automatically when the
+	// index is gone. Unindexed projects get a one-line awareness hint so the
+	// model knows the tool exists instead of defaulting to grep.
 	pi.on("before_agent_start", async (event, ctx) => {
-		// Sentinel = the hint's full first line: a bare "# CodeGraph" substring
+		// Sentinel = a hint's full first line: a bare "# CodeGraph" substring
 		// can appear in project docs included in the base prompt.
-		if (event.systemPrompt.includes("# CodeGraph — this project is indexed")) return;
-		if (!(await isIndexed(ctx.cwd))) return; // no index — stay quiet
-		return { systemPrompt: `${event.systemPrompt}\n\n${INDEX_HINT}` };
+		if (
+			event.systemPrompt.includes("# CodeGraph — this project is indexed") ||
+			event.systemPrompt.includes("# CodeGraph\n")
+		) {
+			return;
+		}
+		const root = await findIndexRoot(ctx.cwd);
+		const hint = root ? INDEX_HINT.replace("$ROOT", root) : AWARE_HINT;
+		return { systemPrompt: `${event.systemPrompt}\n\n${hint}` };
 	});
 
 }
