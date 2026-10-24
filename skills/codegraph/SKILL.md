@@ -21,6 +21,6 @@ Query CodeGraph index via \`codegraph_explore\` for verbatim source, call paths,
 ## Rules
 
 - Trust AST output; never re-verify with grep.
-- "Already sent earlier": lines exist in earlier context; do not re-fetch.
-- "⚠️ files edited since sync": re-read only flagged files directly.
+- Call paths need exact symbol names; empty results list near-miss names — retry with those.
+- "⚠️ files edited since sync": re-read only flagged files directly. "auto-sync DISABLED/RECOVERING" banner: whole index may be stale — read files directly until it clears.
 - Unindexed project: use built-in tools; suggest user run \`/codegraph-init\` (never run auto-init).

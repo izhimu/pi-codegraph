@@ -1,6 +1,6 @@
 {
 	"name": "@izhimu/pi-codegraph",
-	"version": "0.4.0",
+	"version": "0.5.0",
 	"description": "CodeGraph support for pi and oh-my-pi — symbol source + call paths via the codegraph CLI",
 	"type": "module",
 	"keywords": ["pi-package", "codegraph", "code-intelligence", "knowledge-graph", "oh-my-pi"],

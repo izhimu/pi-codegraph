@@ -2,6 +2,20 @@
 
 All notable changes to `@izhimu/pi-codegraph` will be documented in this file.
 
+## [0.5.0] - 2026-10-24
+
+### Added
+- **Session call stats**: `/codegraph-status` now ends with a `codegraph_explore` usage line for this session — calls, hits, empty results, errors (reset at session start), mirroring pi-rtk's session stats line.
+- **Per-turn auto-sync**: while a project is indexed, a throttled (30s) incremental `codegraph sync -q` runs in the background on every turn, not just at session start — mid-session edits are indexed before the model's next query. Session-start and per-turn syncs share one throttle.
+
+### Fixed
+- **oh-my-pi compatibility**: `before_agent_start` now handles oh-my-pi's `string[]` system prompt (segments joined with `\n\n`, hint returned as one plain string, which oh-my-pi re-wraps into an array). Previously the sentinel check used array `includes` (exact-element match, never true), so the hint was re-appended every turn, and multi-segment prompts were comma-joined by template interpolation.
+- **oh-my-pi tool visibility**: `codegraph_explore` now declares `loadMode: "essential"` — oh-my-pi defaults extension tools to `"discoverable"` (schema kept off every request, reachable only via tool search / `xd://` mounting), which is why the model there never called it. pi stores tool definitions verbatim and ignores the extra key.
+
+### Changed
+- Synced `SKILL.md` guidance with upstream codegraph 1.6.x server instructions: dropped the "Already sent earlier" dedup rule (upstream made cross-call dedup opt-in via `CODEGRAPH_EXPLORE_DEDUP=1`, and the CLI bridge never emits it), added exact-symbol-name retry guidance and the auto-sync DISABLED/RECOVERING staleness banners.
+- **Stronger invocation triggers**: the indexed hint gains a pre-edit rule ("before editing a shared symbol or public contract, see all callers first"), the unindexed awareness hint now leads with "try it first" instead of the grep fallback, and a matching prompt guideline was added (pi hosts).
+
 ## [0.4.0] - 2026-09-11
 
 ### Changed & Improved

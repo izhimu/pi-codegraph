@@ -70,12 +70,48 @@ async function findIndexRoot(cwd: string): Promise<string | null> {
 // Two variants keep token cost minimal: full guidance only while indexed,
 // a single awareness line otherwise.
 const INDEX_HINT = `# CodeGraph — this project is indexed (root: $ROOT)
-Use \`codegraph_explore\` BEFORE grep/read for code structure, call paths, and blast radius. Verbatim line-numbered source returned is safe to edit directly. Trust AST results; do not re-verify with grep.`;
+Use \`codegraph_explore\` BEFORE grep/read for code structure, call paths, and blast radius. Verbatim line-numbered source returned is safe to edit directly. Trust AST results; do not re-verify with grep.
+Before editing a shared symbol or public contract, call \`codegraph_explore\` on it to see all callers first — never blind-edit.`;
 
 const AWARE_HINT = `# CodeGraph
-\`codegraph_explore\` tool available: symbol source + call paths in one shot. If the project is not indexed it says so — then fall back to grep and suggest /codegraph-init.`;
+\`codegraph_explore\` tool available: symbol source + call paths in one shot. Try it first for code questions; if it reports no index, fall back to grep and suggest the user run /codegraph-init.`;
+
+// Spacing between background auto-syncs: mid-session edits are indexed before
+// the model's next query without spawning a sync process on every single turn.
+const AUTO_SYNC_INTERVAL_MS = 30_000;
+
+// ── Session stats ─────────────────────────────────────────────────────────
+const ESC = "\x1b";
+const DIM = `${ESC}2m`;
+const RST = `${ESC}0m`;
+
+interface SessionStats {
+	calls: number;
+	hits: number;
+	empty: number;
+	errors: number;
+}
+
+let sessionStats: SessionStats = { calls: 0, hits: 0, empty: 0, errors: 0 };
+
+function statsLine(): string {
+	const s = sessionStats;
+	return (
+		` ${s.calls} explore calls ${DIM}│${RST} ${s.hits} hits ${DIM}│${RST}` +
+		` ${s.empty} empty ${DIM}│${RST} ${s.errors} errors ${DIM}(this session)${RST}`
+	);
+}
 
 export default function codegraphExtension(pi: ExtensionAPI) {
+	// Timestamp of the last background sync — shared by session_start and the
+	// per-turn auto-sync so both throttle together.
+	let lastAutoSyncAt = 0;
+
+	function scheduleSync(pi: ExtensionAPI, root: string) {
+		lastAutoSyncAt = Date.now();
+		// Incremental sync; near-zero cost when nothing changed.
+		void execCg(pi, ["sync", "-q", root], { timeout: 300_000 }).catch(() => {});
+	}
 	// ── codegraph_explore tool ─────────────────────────────────────────────
 	pi.registerTool({
 		name: "codegraph_explore",
@@ -88,6 +124,7 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			"codegraph_explore: symbol source + call paths in one shot from the project's CodeGraph index",
 		promptGuidelines: [
 			"For structural code questions (how does X work, where is X, what breaks if I change X), call codegraph_explore before grep.",
+			"Before editing a shared symbol or public contract, call codegraph_explore on it to see all callers first.",
 			"If codegraph_explore returns empty or says the project is not indexed, fall back to grep and suggest /codegraph-init. Never run codegraph init yourself.",
 		],
 		parameters: Type.Object({
@@ -106,6 +143,7 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			),
 		}),
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+			sessionStats.calls++;
 			// Query from the index root so the tool works from any subdirectory.
 			const cwd = params.path ?? (await findIndexRoot(ctx.cwd)) ?? ctx.cwd;
 			const args = ["explore", params.query, "-p", cwd];
@@ -116,16 +154,30 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 				signal,
 				timeout: 120_000,
 			});
-			if (result.killed) return textResult("codegraph explore timed out (120s)");
+			if (result.killed) {
+				sessionStats.errors++;
+				return textResult("codegraph explore timed out (120s)");
+			}
 			// Non-zero exits carry upstream's agent-friendly guidance (e.g. the
 			// "not initialized" message) — pass it through verbatim.
-			if (result.code !== 0) return textResult(outputOf(result));
+			if (result.code !== 0) {
+				sessionStats.errors++;
+				return textResult(outputOf(result));
+			}
 			const out = result.stdout.trim();
+			if (out) sessionStats.hits++;
+			else sessionStats.empty++;
 			return textResult(
 				out ||
 					"codegraph explore returned no results. Retry with different query terms (symbol names work best); if it stays empty, fall back to grep.",
 			);
 		},
+		// oh-my-pi defaults extension tools to loadMode "discoverable": the
+		// schema stays off every request, reachable only via tool search or
+		// xd:// mounting, so the model never sees it as a callable function.
+		// Declaring "essential" keeps this tool top-level there; pi stores tool
+		// definitions verbatim and ignores the extra key.
+		...({ loadMode: "essential" } as const),
 	});
 
 	// ── /codegraph-init ────────────────────────────────────────────────────
@@ -190,7 +242,7 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 			}
 			const target = args?.trim() || ctx.cwd;
 			const result = await execCg(pi, ["status", target], { timeout: 30_000 });
-			const out = outputOf(result);
+			const out = `${outputOf(result)}\n\n${statsLine()}`;
 			if (ctx.hasUI) ctx.ui.notify(out, result.code === 0 ? "info" : "warning");
 			pi.sendMessage(
 				{ customType: "codegraph-status", content: out, display: true },
@@ -220,6 +272,7 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 
 	// ── session_start: CLI check + incremental sync ──────────────────────
 	pi.on("session_start", async (_event, ctx) => {
+		sessionStats = { calls: 0, hits: 0, empty: 0, errors: 0 };
 		if (!(await ensureCli(pi))) {
 			if (ctx.hasUI && !notifiedMissing) {
 				notifiedMissing = true;
@@ -230,13 +283,12 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 
 		const root = await findIndexRoot(ctx.cwd);
 		if (root) {
-			// Incremental sync; near-zero cost when nothing changed.
-			void execCg(pi, ["sync", "-q", root], { timeout: 300_000 }).catch(() => {});
+			scheduleSync(pi, root);
 		}
 	});
 
 
-	// ── before_agent_start: system-prompt hint, every turn ───────────────
+	// ── before_agent_start: auto-sync + system-prompt hint, every turn ───
 	// Appended to the current system prompt (never replaces it — other
 	// extensions chain through the same value). Re-evaluated each turn, so it
 	// survives compaction, picks up indexes built mid-session via
@@ -244,17 +296,34 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 	// index is gone. Unindexed projects get a one-line awareness hint so the
 	// model knows the tool exists instead of defaulting to grep.
 	pi.on("before_agent_start", async (event, ctx) => {
+		// pi renders event.systemPrompt as one string; oh-my-pi passes string[]
+		// segments (rendered "\n\n"-joined downstream). Merge to one string and
+		// return a string: native on pi, re-wrapped into [string] by oh-my-pi.
+		const segments: string[] = Array.isArray(event.systemPrompt)
+			? event.systemPrompt
+			: [event.systemPrompt];
+		const prompt = segments.join("\n\n");
+		const root = await findIndexRoot(ctx.cwd);
+		// Auto-sync (fire-and-forget, throttled): index mid-session edits before
+		// the model's next query. Runs before the sentinel early-return — hosts
+		// that feed the modified prompt back still need syncing on later turns.
+		if (
+			root &&
+			Date.now() - lastAutoSyncAt > AUTO_SYNC_INTERVAL_MS &&
+			(await ensureCli(pi))
+		) {
+			scheduleSync(pi, root);
+		}
 		// Sentinel = a hint's full first line: a bare "# CodeGraph" substring
 		// can appear in project docs included in the base prompt.
 		if (
-			event.systemPrompt.includes("# CodeGraph — this project is indexed") ||
-			event.systemPrompt.includes("# CodeGraph\n")
+			prompt.includes("# CodeGraph — this project is indexed") ||
+			prompt.includes("# CodeGraph\n")
 		) {
 			return;
 		}
-		const root = await findIndexRoot(ctx.cwd);
 		const hint = root ? INDEX_HINT.replace("$ROOT", root) : AWARE_HINT;
-		return { systemPrompt: `${event.systemPrompt}\n\n${hint}` };
+		return { systemPrompt: `${prompt}\n\n${hint}` };
 	});
 
 }
