@@ -70,7 +70,7 @@ async function findIndexRoot(cwd: string): Promise<string | null> {
 // Two variants keep token cost minimal: full guidance only while indexed,
 // a single awareness line otherwise.
 const INDEX_HINT = `# CodeGraph — this project is indexed (root: $ROOT)
-Use \`codegraph_explore\` BEFORE grep/read for code structure, call paths, and blast radius. Verbatim line-numbered source returned is safe to edit directly. Trust AST results; do not re-verify with grep.
+For ANY code investigation, MUST call \`codegraph_explore\` FIRST, before grep/read. This includes route/URL, symbol, caller, and implementation lookups. Use grep afterward only for remaining literal-text/config searches. Verbatim line-numbered source returned is safe to edit directly. Trust AST results; do not re-verify with grep.
 Before editing a shared symbol or public contract, call \`codegraph_explore\` on it to see all callers first — never blind-edit.`;
 
 const AWARE_HINT = `# CodeGraph
@@ -81,7 +81,7 @@ const AWARE_HINT = `# CodeGraph
 const AUTO_SYNC_INTERVAL_MS = 30_000;
 
 // ── Session stats ─────────────────────────────────────────────────────────
-const ESC = "\x1b";
+const ESC = "\x1b[";
 const DIM = `${ESC}2m`;
 const RST = `${ESC}0m`;
 
@@ -117,13 +117,13 @@ export default function codegraphExtension(pi: ExtensionAPI) {
 		name: "codegraph_explore",
 		label: "CodeGraph Explore",
 		description:
-			"PRIMARY tool for code questions — call it BEFORE grep/read. " +
+			"PRIMARY tool for ANY code investigation, including route/URL and symbol lookups — call it BEFORE grep/read. " +
 			"One query returns the relevant symbols' verbatim line-numbered source plus the call paths between them and a blast-radius summary. " +
 			"If the project is not indexed the output says so: continue with built-in tools and suggest the user run /codegraph-init.",
 		promptSnippet:
-			"codegraph_explore: symbol source + call paths in one shot from the project's CodeGraph index",
+			"codegraph_explore: route/URL lookups, symbol source + call paths in one shot from the project's CodeGraph index",
 		promptGuidelines: [
-			"For structural code questions (how does X work, where is X, what breaks if I change X), call codegraph_explore before grep.",
+			"For any code investigation, call codegraph_explore before grep/read, including route/URL, symbol, caller, and implementation lookups. Use grep afterward only for remaining literal-text/config searches.",
 			"Before editing a shared symbol or public contract, call codegraph_explore on it to see all callers first.",
 			"If codegraph_explore returns empty or says the project is not indexed, fall back to grep and suggest /codegraph-init. Never run codegraph init yourself.",
 		],

@@ -2,6 +2,16 @@
 
 All notable changes to `@izhimu/pi-codegraph` will be documented in this file.
 
+## [0.5.2] - 2026-10-26
+
+### Fixed
+- **Default CodeGraph selection for route/URL investigations**: the indexed system prompt, tool description/guidelines, and skill now require `codegraph_explore` first for any code investigation, explicitly including route/URL lookups. `grep` is reserved for remaining literal-text/config searches afterward, preventing endpoint investigations from bypassing CodeGraph.
+
+## [0.5.1] - 2026-10-26
+
+### Fixed
+- **ANSI escape sequence in session stats line**: corrected `ESC` constant definition from `\x1b` to `\x1b[` (Control Sequence Introducer) in `extensions/codegraph.ts`. Previously, the missing bracket caused terminals to reject the escape sequence and render trailing literal `m` artifacts around status delimiters (`2m│ 0m` -> `m│m`).
+
 ## [0.5.0] - 2026-10-24
 
 ### Added

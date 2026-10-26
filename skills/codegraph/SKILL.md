@@ -1,6 +1,6 @@
 ---
 name: codegraph
-description: Query the project's CodeGraph index (symbol source + call paths) via the codegraph_explore tool. Use when answering structural code questions — how X works, where X is, what a change affects — in a project that has a .codegraph/ index.
+description: Query the project's CodeGraph index (symbol source + call paths) via the codegraph_explore tool. Use FIRST for any code investigation in an indexed project, including route/URL lookups and structural questions — how X works, where X is, what a change affects.
 ---
 
 # CodeGraph
@@ -9,8 +9,8 @@ Query CodeGraph index via \`codegraph_explore\` for verbatim source, call paths,
 
 ## When to use
 
-- Structural code questions ("how X works", "where X is", "what calls Y", "what breaks if Z changes").
-- Before editing, to map symbols and blast radius. Prefer over grep/read on indexed projects.
+- Any code investigation, including route/URL lookups and structural questions ("how X works", "where X is", "what calls Y", "what breaks if Z changes"). Call before grep/read; use grep afterward only for remaining literal-text/config searches.
+- Before editing, to map symbols and blast radius.
 
 ## Parameters
 
